@@ -77,6 +77,23 @@ function SoftPhone(): React.JSX.Element {
         e.preventDefault()
         store.setRecordByDefault(!store.recordByDefault)
       }
+      // Esc hangs up the current call — unless a dialog/menu is open (those use
+      // Esc to close themselves).
+      if (e.key === 'Escape') {
+        if (
+          document.querySelector(
+            '[role="dialog"][data-state="open"], [role="menu"][data-state="open"]'
+          )
+        ) {
+          return
+        }
+        const calls = Object.values(useSoftphoneStore.getState().activeCalls)
+        if (calls.length === 0) return
+        e.preventDefault()
+        // Hang up the most recently started call (rejects an incoming, byes an active).
+        const target = calls.reduce((a, b) => (a.startedAt >= b.startedAt ? a : b))
+        useSoftphoneStore.getState().hangup(target.id)
+      }
     }
     window.addEventListener('keydown', onKeydown)
     return () => window.removeEventListener('keydown', onKeydown)

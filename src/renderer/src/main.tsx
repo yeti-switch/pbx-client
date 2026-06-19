@@ -1,4 +1,5 @@
 import './assets/index.css'
+import './lib/theme' // apply persisted theme before first paint
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

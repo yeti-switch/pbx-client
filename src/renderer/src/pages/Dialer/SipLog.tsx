@@ -231,19 +231,22 @@ function SipLog({ onClose }: { onClose: () => void }): React.JSX.Element {
             return (
               <div
                 key={entry.id}
-                className={cn('border-b border-border/40 px-3', rowClass(entry.level))}
+                className={cn(
+                  // Single block row with inline fields so a mouse selection (and
+                  // the Linux PRIMARY/select-to-copy buffer) serializes one entry
+                  // per line instead of one field per line. whitespace-pre-wrap
+                  // keeps the column padding and the explicit newline before `rest`.
+                  'border-b border-border/40 px-3 break-all whitespace-pre-wrap',
+                  rowClass(entry.level)
+                )}
               >
-                <div className="flex gap-2">
-                  <span className="shrink-0 text-muted-foreground">
-                    {formatTime(entry.timestamp)}
-                  </span>
-                  <span className={cn('w-10 shrink-0 font-semibold', levelClass(entry.level))}>
-                    {entry.level.toUpperCase()}
-                  </span>
-                  <span className="shrink-0 text-muted-foreground">{entry.category}</span>
-                  <span className="min-w-0 break-all">{first}</span>
-                </div>
-                {rest && <pre className="mt-0.5 whitespace-pre-wrap break-all pl-4">{rest}</pre>}
+                <span className="text-muted-foreground">{formatTime(entry.timestamp)} </span>
+                <span className={cn('font-semibold', levelClass(entry.level))}>
+                  {entry.level.toUpperCase().padEnd(5)}{' '}
+                </span>
+                <span className="text-muted-foreground">{entry.category} </span>
+                <span>{first}</span>
+                {rest && <span>{`\n${rest}`}</span>}
               </div>
             )
           })}

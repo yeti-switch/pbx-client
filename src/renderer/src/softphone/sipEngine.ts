@@ -20,6 +20,7 @@ import { useAudioDevicesStore } from './audioDevicesStore'
 import { useRecordingsStore } from './recordings'
 import { callStatsStore } from './callStats'
 import { desktop } from './desktop'
+import { sdhPool } from './sdhPool'
 
 type UserAgentCore = Core.UserAgentCore
 
@@ -64,6 +65,29 @@ function sipDomain(): string {
   const config = useConfigStore.getState()
   return config.domain.trim() || domainFromEndpoint(config.wssEndpoints[0] ?? '')
 }
+
+/**
+ * SDP modifier that drops ICE candidate lines whose transport is TCP, so only
+ * UDP candidates are offered/answered. (The browser still gathers TCP host
+ * candidates internally — there's no standard API to disable that — but they're
+ * never put on the wire.) Applied to outbound invites, answers and re-invites.
+ */
+function stripTcpCandidates(
+  description: RTCSessionDescriptionInit
+): Promise<RTCSessionDescriptionInit> {
+  if (description.sdp) {
+    description.sdp = description.sdp
+      .split(/\r?\n/)
+      .filter((line) => {
+        const m = line.match(/^a=candidate:\S+ \d+ (\w+)/i)
+        return !(m && m[1].toLowerCase() === 'tcp')
+      })
+      .join('\r\n')
+  }
+  return Promise.resolve(description)
+}
+
+const SDP_MODIFIERS = [stripTcpCandidates]
 
 function deriveRegistrationState(): void {
   let state: RegistererState | null = null
@@ -275,10 +299,35 @@ export const sipEngine = {
     const domain = sipDomain()
     const audioDevices = useAudioDevicesStore.getState()
 
+    // Contact transport param: match the endpoint scheme (wss:// → transport=wss,
+    // ws:// → transport=ws). sip.js defaults to "ws" regardless.
+    const contactTransport = endpoints[0].trim().toLowerCase().startsWith('wss') ? 'wss' : 'ws'
+
+    const sdhFactoryOptions = {
+      peerConnectionConfiguration: {
+        iceServers: config.iceServers
+        // (iceCandidatePoolSize intentionally unset — it could keep the ICE agent
+        // gathering to maintain the pool and suppress the 'complete' transition.)
+      },
+      // Cap how long we wait for ICE gathering before sending the SDP. Default
+      // is 5000ms; host candidates are gathered almost instantly, so a short
+      // cap makes call setup snappy. (Do NOT use 0 — that disables the cap and
+      // waits indefinitely for gathering to fully complete.)
+      iceGatheringTimeout: 1000,
+      constraints: {
+        audio:
+          audioDevices.selectedInputId && audioDevices.selectedInputId !== 'default'
+            ? { deviceId: { exact: audioDevices.selectedInputId } }
+            : true,
+        video: false
+      }
+    }
+
     const options: UserAgentOptions = {
       uri: UserAgent.makeURI(`sip:${config.username}@${domain}`),
       authorizationUsername: config.username,
       authorizationPassword: config.password,
+      contactParams: { transport: contactTransport },
       transportOptions: {
         server: endpoints[0],
         keepAliveInterval: 30,
@@ -286,16 +335,10 @@ export const sipEngine = {
         keepAliveHistorySize: 60
       } as any,
       resolveServers: async () => endpoints,
-      sessionDescriptionHandlerFactoryOptions: {
-        peerConnectionConfiguration: { iceServers: config.iceServers },
-        constraints: {
-          audio:
-            audioDevices.selectedInputId && audioDevices.selectedInputId !== 'default'
-              ? { deviceId: { exact: audioDevices.selectedInputId } }
-              : true,
-          video: false
-        }
-      },
+      // Custom factory serves pre-warmed (pre-gathered) SDHs from a pool, with
+      // transparent fallback to the default on-demand SDH when the pool is empty.
+      sessionDescriptionHandlerFactory: sdhPool.factory,
+      sessionDescriptionHandlerFactoryOptions: sdhFactoryOptions,
       delegate: {
         onInvite(invitation: Invitation) {
           const { from } = invitation.request
@@ -350,6 +393,9 @@ export const sipEngine = {
       useSoftphoneStore.setState({ registrationState: null, registrationFlows: [] })
       return
     }
+
+    // Start pre-warming SDHs now that the UA (logger) and config exist.
+    sdhPool.start(ua, sdhFactoryOptions)
 
     // Bare UUID for +sip.instance (sip.js validates against its `uuid` grammar and
     // wraps it as <urn:uuid:…>). Use the persisted/custom value; fall back to a
@@ -449,6 +495,7 @@ export const sipEngine = {
   },
 
   async destroy(): Promise<void> {
+    sdhPool.stop()
     if (reconnectTimer) {
       clearTimeout(reconnectTimer)
       reconnectTimer = null
@@ -485,9 +532,13 @@ export const sipEngine = {
 
     useSoftphoneStore.setState({ lastCallError: null })
     store().upsertContact(phone)
+    store().recordDial(phone)
 
     const eventId = randomId()
-    const inviter = new Inviter(ua, target)
+    const inviter = new Inviter(ua, target, {
+      sessionDescriptionHandlerModifiers: SDP_MODIFIERS,
+      sessionDescriptionHandlerModifiersReInvite: SDP_MODIFIERS
+    })
     const call: ActiveCall = {
       id: inviter.id,
       direction: 'outbound',
@@ -576,7 +627,9 @@ export const sipEngine = {
     const call = store().activeCalls[callId]
     const session = sessions.get(callId)
     if (!call || call.direction !== 'inbound' || !session) return
-    ;(session as Invitation).accept().catch(() => {})
+    ;(session as Invitation)
+      .accept({ sessionDescriptionHandlerModifiers: SDP_MODIFIERS })
+      .catch(() => {})
   },
 
   hangup(callId: string): void {
@@ -611,6 +664,7 @@ export const sipEngine = {
     ;(session as any).sessionDescriptionHandlerOptionsReInvite = { hold }
     session
       .invite({
+        sessionDescriptionHandlerModifiers: SDP_MODIFIERS,
         requestDelegate: {
           onAccept: () => store().patchActiveCall(callId, { held: hold, holdPending: false }),
           onReject: () => {

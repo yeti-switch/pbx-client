@@ -1,5 +1,6 @@
-import { Phone, Settings } from 'lucide-react'
+import { Phone, Settings, Sun, Moon, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useThemeStore, type Theme } from '@/lib/theme'
 
 export type NavItemId = 'dialer' | 'settings'
 
@@ -42,6 +43,27 @@ function RailButton({
   )
 }
 
+const THEME_ORDER: Theme[] = ['light', 'dark', 'system']
+const THEME_ICON = { light: Sun, dark: Moon, system: Monitor }
+
+function ThemeToggle(): React.JSX.Element {
+  const theme = useThemeStore((s) => s.theme)
+  const setTheme = useThemeStore((s) => s.setTheme)
+  const Icon = THEME_ICON[theme]
+  const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length]
+  return (
+    <button
+      type="button"
+      title={`Theme: ${theme} (click for ${next})`}
+      aria-label={`Theme: ${theme}`}
+      onClick={() => setTheme(next)}
+      className="flex size-10 items-center justify-center rounded-lg text-sidebar-foreground/70 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+    >
+      <Icon className="size-5" />
+    </button>
+  )
+}
+
 /** Always-collapsed left vertical menu (icon-only rail). */
 function NavRail({ active, onSelect }: NavRailProps): React.JSX.Element {
   return (
@@ -50,6 +72,7 @@ function NavRail({ active, onSelect }: NavRailProps): React.JSX.Element {
         <RailButton key={item.id} item={item} active={active === item.id} onSelect={onSelect} />
       ))}
       <div className="flex-1" />
+      <ThemeToggle />
       {BOTTOM_ITEMS.map((item) => (
         <RailButton key={item.id} item={item} active={active === item.id} onSelect={onSelect} />
       ))}

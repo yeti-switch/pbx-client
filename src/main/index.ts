@@ -96,6 +96,12 @@ function createTray(): void {
 function registerIpc(): void {
   ipcMain.handle(IPC.configGet, () => sipConfig)
   ipcMain.handle(IPC.configPath, () => configPath())
+  ipcMain.handle(IPC.appInfo, () => ({
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node
+  }))
   ipcMain.handle(IPC.configSet, (_e, cfg: SipConfig) => {
     sipConfig = { ...DEFAULT_SIP_CONFIG, ...cfg }
     // Never allow an empty instance id — keep/generate one.
@@ -143,7 +149,8 @@ function createWindow(): void {
     minHeight: 560,
     show: false,
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    // Window header / taskbar icon (Linux + Windows; ignored on macOS).
+    icon,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false

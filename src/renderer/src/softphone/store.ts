@@ -18,6 +18,17 @@ import { sipEngine } from './sipEngine'
 const LS_CONTACTS = 'softphone:contacts'
 const LS_HISTORY = 'softphone:call-history'
 const LS_RECORD_DEFAULT = 'softphone:record-by-default'
+const LS_DIAL_HISTORY = 'softphone:dial-history'
+const DIAL_HISTORY_MAX = 100
+
+function loadDialHistory(): string[] {
+  try {
+    const arr = JSON.parse(localStorage.getItem(LS_DIAL_HISTORY) ?? '[]')
+    return Array.isArray(arr) ? (arr as string[]) : []
+  } catch {
+    return []
+  }
+}
 
 function loadContacts(): Contact[] {
   try {
@@ -45,6 +56,8 @@ interface SoftphoneState {
   activeCalls: Record<string, ActiveCall>
   contacts: Contact[]
   callHistory: Record<string, CallEvent[]>
+  /** Numbers dialed, most-recent first (for ↑/↓ navigation in the dialpad). */
+  dialHistory: string[]
   selectedPhone: string | null
 
   // UI actions (delegate to the SIP engine)
@@ -66,6 +79,8 @@ interface SoftphoneState {
   selectContact: (phone: string) => void
   setRecordByDefault: (v: boolean) => void
   updateContact: (phone: string, patch: { displayName?: string; phone?: string }) => void
+  /** Record an outbound-dialed number into the dial history. */
+  recordDial: (number: string) => void
 
   // Engine-facing mutators
   setActiveCall: (call: ActiveCall) => void
@@ -84,6 +99,7 @@ export const useSoftphoneStore = create<SoftphoneState>((set) => ({
   activeCalls: {},
   contacts: loadContacts(),
   callHistory: loadHistory(),
+  dialHistory: loadDialHistory(),
   selectedPhone: null,
 
   // ── Delegated to the engine ──
@@ -105,6 +121,16 @@ export const useSoftphoneStore = create<SoftphoneState>((set) => ({
 
   // ── Pure state ──
   selectContact: (phone) => set({ selectedPhone: phone }),
+
+  recordDial: (number) =>
+    set((s) => {
+      const n = number.trim()
+      if (!n) return {}
+      // Most-recent first, de-duplicated, capped.
+      const dialHistory = [n, ...s.dialHistory.filter((x) => x !== n)].slice(0, DIAL_HISTORY_MAX)
+      localStorage.setItem(LS_DIAL_HISTORY, JSON.stringify(dialHistory))
+      return { dialHistory }
+    }),
 
   setRecordByDefault: (v) => {
     localStorage.setItem(LS_RECORD_DEFAULT, String(v))

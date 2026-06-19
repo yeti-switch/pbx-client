@@ -48,6 +48,14 @@ export interface IncomingCallPayload {
   label: string
 }
 
+/** App/runtime info for the About section. */
+export interface AppInfo {
+  version: string
+  electron: string
+  chrome: string
+  node: string
+}
+
 /** IPC channel names — keep renderer/main in sync. */
 export const IPC = {
   configGet: 'config:get',
@@ -60,5 +68,7 @@ export const IPC = {
   notifyIncoming: 'app:notify-incoming',
   clearIncoming: 'app:clear-incoming',
   // main → renderer: user accepted the incoming-call notification
-  answerCall: 'call:answer'
+  answerCall: 'call:answer',
+  // App/runtime info (About section)
+  appInfo: 'app:info'
 } as const

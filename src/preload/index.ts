@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import { IPC, type AppStatus, type SipConfig } from '../shared/ipc'
+import { IPC, type AppInfo, type AppStatus, type SipConfig } from '../shared/ipc'
 
 // Custom APIs for renderer — the softphone bridge surface.
 const api = {
@@ -13,6 +13,9 @@ const api = {
       ipcRenderer.on(IPC.configChanged, listener)
       return () => ipcRenderer.removeListener(IPC.configChanged, listener)
     }
+  },
+  app: {
+    info: (): Promise<AppInfo> => ipcRenderer.invoke(IPC.appInfo)
   },
   tray: {
     setStatus: (status: AppStatus): void => ipcRenderer.send(IPC.appSetStatus, status)
