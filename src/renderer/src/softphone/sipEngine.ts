@@ -87,7 +87,29 @@ function stripTcpCandidates(
   return Promise.resolve(description)
 }
 
-const SDP_MODIFIERS = [stripTcpCandidates]
+/**
+ * SDP modifier that keeps ONLY server-reflexive (srflx) ICE candidates — drops
+ * host and relay. Enabled via the "ICE srflx only" WebRTC setting.
+ */
+function stripToSrflxOnly(
+  description: RTCSessionDescriptionInit
+): Promise<RTCSessionDescriptionInit> {
+  if (description.sdp) {
+    description.sdp = description.sdp
+      .split(/\r?\n/)
+      .filter((line) => !line.startsWith('a=candidate:') || /\btyp srflx\b/.test(line))
+      .join('\r\n')
+  }
+  return Promise.resolve(description)
+}
+
+/** SDP modifiers to apply per call, based on current config. */
+function sdpModifiers(): Array<
+  (d: RTCSessionDescriptionInit) => Promise<RTCSessionDescriptionInit>
+> {
+  // srflx-only is a superset of TCP-strip (it removes everything non-srflx).
+  return useConfigStore.getState().iceSrflxOnly ? [stripToSrflxOnly] : [stripTcpCandidates]
+}
 
 function deriveRegistrationState(): void {
   let state: RegistererState | null = null
@@ -373,6 +395,16 @@ export const sipEngine = {
           wireSession(call.id, remoteUri, displayName, eventId)
           useSoftphoneStore.setState({ selectedPhone: phone })
           desktop.notifyIncoming(call.id, displayName ?? phone)
+          // Send 183 early-media (generated ringback) so the answer is built and
+          // ICE connects DURING ringing → audio is ~instant when the user answers.
+          // Pass the SDP modifiers so the early answer is TCP-stripped too.
+          void invitation
+            .progress({ statusCode: 183, sessionDescriptionHandlerModifiers: sdpModifiers() })
+            .catch((e) =>
+              useSipLogStore
+                .getState()
+                .append('warn', 'invitation', undefined, `183 early-media failed: ${String(e)}`)
+            )
         }
       },
       userAgentString: 'pbx-client',
@@ -536,8 +568,8 @@ export const sipEngine = {
 
     const eventId = randomId()
     const inviter = new Inviter(ua, target, {
-      sessionDescriptionHandlerModifiers: SDP_MODIFIERS,
-      sessionDescriptionHandlerModifiersReInvite: SDP_MODIFIERS
+      sessionDescriptionHandlerModifiers: sdpModifiers(),
+      sessionDescriptionHandlerModifiersReInvite: sdpModifiers()
     })
     const call: ActiveCall = {
       id: inviter.id,
@@ -628,7 +660,13 @@ export const sipEngine = {
     const session = sessions.get(callId)
     if (!call || call.direction !== 'inbound' || !session) return
     ;(session as Invitation)
-      .accept({ sessionDescriptionHandlerModifiers: SDP_MODIFIERS })
+      .accept({ sessionDescriptionHandlerModifiers: sdpModifiers() })
+      .then(() => {
+        // Swap the early-media ringback for the real mic (replaceTrack — no SDP
+        // change). No-op for the plain SDH fallback (no attachRealMic method).
+        const sdh = (session as any).sessionDescriptionHandler
+        return sdh && typeof sdh.attachRealMic === 'function' ? sdh.attachRealMic() : undefined
+      })
       .catch(() => {})
   },
 
@@ -664,7 +702,7 @@ export const sipEngine = {
     ;(session as any).sessionDescriptionHandlerOptionsReInvite = { hold }
     session
       .invite({
-        sessionDescriptionHandlerModifiers: SDP_MODIFIERS,
+        sessionDescriptionHandlerModifiers: sdpModifiers(),
         requestDelegate: {
           onAccept: () => store().patchActiveCall(callId, { held: hold, holdPending: false }),
           onReject: () => {

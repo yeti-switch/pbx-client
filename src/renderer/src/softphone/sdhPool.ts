@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { Web } from 'sip.js'
+import { Web, Invitation } from 'sip.js'
 import type {
   BodyAndContentType,
   Session,
@@ -50,7 +50,8 @@ const mediaStreamFactory = Web.defaultMediaStreamFactory()
 
 let ua: UserAgent | null = null
 let config: SdhConfig | null = null
-let pool: PooledSdh[] = []
+let offererPool: PooledSdh[] = [] // outbound: pre-gathered offer SDHs
+let answererPool: PooledSdh[] = [] // inbound: stable PCs with prefetched ICE pool
 let sweepTimer: ReturnType<typeof setInterval> | null = null
 let listenersAttached = false
 let seq = 0
@@ -158,6 +159,154 @@ class PrewarmSessionDescriptionHandler extends Web.SessionDescriptionHandler {
   }
 }
 
+// ─── Inbound: ringback early-media answerer ─────────────────────────────────
+
+/** Generated ringback tone (US: 440+480 Hz, 2s on / 4s off) as a MediaStream. */
+function createRingback(): { stream: MediaStream; stop: () => void } {
+  const ctx = new AudioContext()
+  const dest = ctx.createMediaStreamDestination()
+  let osc1: OscillatorNode | null = null
+  let osc2: OscillatorNode | null = null
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let stopped = false
+  const tone = (freq: number): OscillatorNode => {
+    const o = ctx.createOscillator()
+    const g = ctx.createGain()
+    o.frequency.value = freq
+    g.gain.value = 0.2
+    o.connect(g)
+    g.connect(dest)
+    o.start()
+    return o
+  }
+  const ring = (): void => {
+    if (stopped) return
+    osc1 = tone(440)
+    osc2 = tone(480)
+    timer = setTimeout(() => {
+      osc1?.stop()
+      osc1 = null
+      osc2?.stop()
+      osc2 = null
+      if (!stopped) timer = setTimeout(ring, 4000)
+    }, 2000)
+  }
+  ring()
+  return {
+    stream: dest.stream,
+    stop: () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      osc1?.stop()
+      osc2?.stop()
+      ctx.close().catch(() => {})
+    }
+  }
+}
+
+/** Resolve when ICE candidates have settled (250ms idle / end / cap) — NOT on
+ * iceGatheringState 'complete' (which can lag indefinitely). */
+function awaitGatherSettled(pc: RTCPeerConnection, timeout: number): Promise<void> {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let done = false
+    const finish = (): void => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      pc.removeEventListener('icecandidate', onCand)
+      pc.removeEventListener('icegatheringstatechange', onState)
+      resolve()
+    }
+    const onCand = (e: RTCPeerConnectionIceEvent): void => {
+      if (!e.candidate) finish()
+      else {
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(finish, 250)
+      }
+    }
+    const onState = (): void => {
+      if (pc.iceGatheringState === 'complete') finish()
+    }
+    pc.addEventListener('icecandidate', onCand)
+    pc.addEventListener('icegatheringstatechange', onState)
+    setTimeout(finish, timeout) // hard cap
+  })
+}
+
+/**
+ * Inbound SDH: builds the early-media (183) answer with a generated **ringback**
+ * track instead of the mic (so the caller hears ringing during ringing and we
+ * never open the mic before answer), and resolves ICE on candidate-settle.
+ * On answer, `attachRealMic()` swaps the ringback for the real mic via
+ * replaceTrack (no SDP change / no re-gather).
+ */
+class AnswererSessionDescriptionHandler extends Web.SessionDescriptionHandler {
+  private ringback?: { stream: MediaStream; stop: () => void }
+
+  protected getLocalMediaStream(): Promise<void> {
+    if (!this.peerConnection) return Promise.reject(new Error('Peer connection closed.'))
+    if (this.ringback) return Promise.resolve()
+    log('answerer: using generated ringback as early-media (no mic)')
+    this.ringback = createRingback()
+    return this.setLocalMediaStream(this.ringback.stream)
+  }
+
+  protected waitForIceGatheringComplete(restart = false, timeout = 0): Promise<void> {
+    const pc = this.peerConnection
+    if (!pc) return Promise.resolve()
+    if (!restart && pc.iceGatheringState === 'complete') return Promise.resolve()
+    return awaitGatherSettled(pc, timeout || 1000)
+  }
+
+  /** Swap the ringback track for the real mic when the user answers. */
+  async attachRealMic(): Promise<void> {
+    const pc = this.peerConnection
+    if (!pc) return
+    const inputId = useAudioDevicesStore.getState().selectedInputId
+    const audio: MediaTrackConstraints | boolean =
+      inputId && inputId !== 'default' ? { deviceId: inputId } : true
+    const stream = await navigator.mediaDevices.getUserMedia({ audio, video: false })
+    const mic = stream.getAudioTracks()[0]
+    const sender = pc.getSenders().find((s) => s.track?.kind === 'audio') ?? pc.getSenders()[0]
+    if (sender && mic) await sender.replaceTrack(mic)
+    this.ringback?.stop()
+    this.ringback = undefined
+    log('answerer: swapped ringback → real mic')
+  }
+
+  close(): void {
+    this.ringback?.stop()
+    this.ringback = undefined
+    super.close()
+  }
+}
+
+function buildAnswererSdh(id: number): SessionDescriptionHandler | null {
+  if (!ua || !config) return null
+  const logger = ua.getLogger('sip.SessionDescriptionHandler', `answerer#${id}`)
+  return new AnswererSessionDescriptionHandler(logger, mediaStreamFactory, {
+    iceGatheringTimeout: config.iceGatheringTimeout,
+    // Pre-fetch a candidate pool while the PC sits idle in the pool (stable),
+    // so the answer's candidates are ready and the 183 goes out faster.
+    peerConnectionConfiguration: {
+      ...config.peerConnectionConfiguration,
+      iceCandidatePoolSize: 1
+    }
+  })
+}
+
+function spawnAnswerer(): void {
+  const id = (seq += 1)
+  const sdh = buildAnswererSdh(id)
+  if (!sdh) return
+  // No pre-offer — staying in "stable" lets iceCandidatePoolSize prefetch the
+  // candidate pool, which the answer adopts at call time.
+  answererPool.push({ sdh, expiresAt: Date.now() + TTL_MS })
+  log(`pool refill: spawned answerer#${id} (answerer pool size ${answererPool.length})`)
+}
+
 function buildSdh(id: number): SessionDescriptionHandler | null {
   if (!ua || !config) return null
   try {
@@ -186,31 +335,34 @@ function spawnWarm(): void {
   const sdh = buildSdh(id)
   if (!sdh) return
   preGather(sdh, id)
-  pool.push({ sdh, expiresAt: Date.now() + TTL_MS })
-  log(`pool refill: spawned SDH prewarm#${id} (pool size ${pool.length})`)
+  offererPool.push({ sdh, expiresAt: Date.now() + TTL_MS })
+  log(`pool refill: spawned SDH prewarm#${id} (offerer pool size ${offererPool.length})`)
 }
 
-function maintain(): void {
-  if (!ua || !config) return
+function dropExpired(p: PooledSdh[]): PooledSdh[] {
   const now = Date.now()
-  // Drop expired entries.
-  const before = pool.length
-  pool = pool.filter((e) => {
+  return p.filter((e) => {
     if (e.expiresAt <= now) {
       closeSdh(e.sdh)
       return false
     }
     return true
   })
-  const dropped = before - pool.length
-  if (dropped > 0) log(`maintain: dropped ${dropped} expired (TTL ${TTL_MS}ms), refilling`)
-  // Top up to target.
-  while (pool.length < TARGET_SIZE) spawnWarm()
+}
+
+function maintain(): void {
+  if (!ua || !config) return
+  offererPool = dropExpired(offererPool)
+  answererPool = dropExpired(answererPool)
+  while (offererPool.length < TARGET_SIZE) spawnWarm()
+  while (answererPool.length < TARGET_SIZE) spawnAnswerer()
 }
 
 function flush(): void {
-  pool.forEach((e) => closeSdh(e.sdh))
-  pool = []
+  offererPool.forEach((e) => closeSdh(e.sdh))
+  answererPool.forEach((e) => closeSdh(e.sdh))
+  offererPool = []
+  answererPool = []
 }
 
 function onNetworkChange(): void {
@@ -271,23 +423,41 @@ export const sdhPool = {
   },
 
   /**
-   * SessionDescriptionHandlerFactory: serve a pre-warmed SDH if available,
-   * otherwise fall back to sip.js's default (on-demand) factory.
+   * SessionDescriptionHandlerFactory:
+   * - OUTBOUND (Inviter): serve a pre-gathered offerer SDH (reuse offer, no wait).
+   * - INBOUND (Invitation): serve a stable answerer SDH whose candidate pool was
+   *   pre-fetched (iceCandidatePoolSize) so the 183 answer is built faster.
+   * Both fall back to a freshly built SDH when their pool is empty.
    */
   factory(session: Session, options?: object): SessionDescriptionHandler {
     const now = Date.now()
-    let entry = pool.shift()
-    // Skip/close any expired entries.
-    while (entry && entry.expiresAt <= now) {
-      closeSdh(entry.sdh)
-      entry = pool.shift()
+    const take = (p: PooledSdh[]): PooledSdh | undefined => {
+      let entry = p.shift()
+      while (entry && entry.expiresAt <= now) {
+        closeSdh(entry.sdh)
+        entry = p.shift()
+      }
+      queueMicrotask(maintain) // replenish
+      return entry
     }
-    queueMicrotask(maintain) // replenish
+
+    if (session instanceof Invitation) {
+      const entry = take(answererPool)
+      if (entry) {
+        log('inbound call — served pre-warmed answerer SDH (prefetched ICE pool)')
+        return entry.sdh
+      }
+      const fresh = buildAnswererSdh((seq += 1))
+      log(`inbound call — ${fresh ? 'fresh answerer SDH' : 'default SDH (pool not started)'}`)
+      return fresh ?? defaultFactory(session, options as any)
+    }
+
+    const entry = take(offererPool)
     if (entry) {
-      log('served pre-warmed SDH — reusing pre-gathered candidates (no call-time ICE wait)')
+      log('outbound call — served pre-warmed offerer SDH (reusing pre-gathered offer)')
       return entry.sdh
     }
-    log('pool empty — building fresh on-demand SDH (ICE gathers at call time)')
+    log('outbound call — pool empty, fresh on-demand SDH (ICE gathers at call time)')
     return defaultFactory(session, options as any)
   }
 }

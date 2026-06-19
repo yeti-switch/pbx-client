@@ -9,7 +9,8 @@ import {
   Monitor,
   Phone,
   Palette,
-  Info
+  Info,
+  Network
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -17,10 +18,11 @@ import { useThemeStore, type Theme } from '@/lib/theme'
 import { useConfigStore } from '@/softphone/configStore'
 import type { AppInfo } from '@shared/ipc'
 
-type SectionId = 'sip' | 'appearance' | 'about'
+type SectionId = 'sip' | 'webrtc' | 'appearance' | 'about'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Phone }[] = [
   { id: 'sip', label: 'SIP Settings', icon: Phone },
+  { id: 'webrtc', label: 'WebRTC', icon: Network },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'about', label: 'About', icon: Info }
 ]
@@ -54,6 +56,8 @@ function SettingsPage(): React.JSX.Element {
   const [instanceId, setInstanceId] = useState('')
   const [endpoints, setEndpoints] = useState('')
   const [iceServers, setIceServers] = useState('')
+  const [iceSrflxOnly, setIceSrflxOnly] = useState(false)
+  const [webrtcFieldTrials, setWebrtcFieldTrials] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [saved, setSaved] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -79,6 +83,8 @@ function SettingsPage(): React.JSX.Element {
     setIceServers(
       config.iceServers.map((s) => (Array.isArray(s.urls) ? s.urls.join(' ') : s.urls)).join('\n')
     )
+    setIceSrflxOnly(config.iceSrflxOnly)
+    setWebrtcFieldTrials(config.webrtcFieldTrials)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.loaded])
 
@@ -89,7 +95,9 @@ function SettingsPage(): React.JSX.Element {
       domain: domain.trim(),
       instanceId: instanceId.trim(),
       wssEndpoints: linesToList(endpoints),
-      iceServers: linesToList(iceServers).map((urls) => ({ urls }))
+      iceServers: linesToList(iceServers).map((urls) => ({ urls })),
+      iceSrflxOnly,
+      webrtcFieldTrials: webrtcFieldTrials.trim()
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -252,18 +260,6 @@ function SettingsPage(): React.JSX.Element {
                 </p>
               </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium">ICE servers (optional)</label>
-                <textarea
-                  className={`${inputClass} min-h-16 font-mono`}
-                  value={iceServers}
-                  placeholder={'stun:stun.l.google.com:19302'}
-                  spellCheck={false}
-                  onChange={(e) => setIceServers(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">One URL per line.</p>
-              </div>
-
               <div className="flex items-center gap-3 pt-1">
                 <button
                   type="button"
@@ -285,6 +281,76 @@ function SettingsPage(): React.JSX.Element {
                   Stored at <span className="font-mono break-all">{configPath}</span>
                 </p>
               )}
+            </CardContent>
+          </Card>
+        )}
+
+        {section === 'webrtc' && (
+          <Card className="max-w-xl">
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium">ICE servers (optional)</label>
+                <textarea
+                  className={`${inputClass} min-h-16 font-mono`}
+                  value={iceServers}
+                  placeholder={'stun:stun.l.google.com:19302'}
+                  spellCheck={false}
+                  onChange={(e) => setIceServers(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">One URL per line.</p>
+              </div>
+
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4"
+                  checked={iceSrflxOnly}
+                  onChange={(e) => setIceSrflxOnly(e.target.checked)}
+                />
+                <span className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium">ICE srflx only</span>
+                  <span className="text-xs text-muted-foreground">
+                    Send only server-reflexive (public) ICE candidates — strip host and relay
+                    candidates from offers/answers. Reduces SDP/ICE noise on multi-interface
+                    machines. Requires a working STUN server; if no srflx is gathered, calls can
+                    fail.
+                  </span>
+                </span>
+              </label>
+
+              <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+                <label className="text-sm font-medium">ICE field trials (advanced)</label>
+                <input
+                  className={`${inputClass} font-mono`}
+                  value={webrtcFieldTrials}
+                  placeholder="WebRTC-IceFieldTrials/initial_select_dampening:100/"
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => setWebrtcFieldTrials(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Passed to Chromium&rsquo;s <span className="font-mono">--force-fieldtrials</span>{' '}
+                  at startup to tune the ICE agent (e.g. check pacing). Expert-only and
+                  version-dependent; applied process-wide and only takes effect after an{' '}
+                  <strong>app restart</strong>.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                  onClick={save}
+                >
+                  Save
+                </button>
+                {saved && (
+                  <span className="flex items-center gap-1 text-sm text-green-600 dark:text-green-400">
+                    <Check className="size-4" />
+                    Saved
+                  </span>
+                )}
+              </div>
             </CardContent>
           </Card>
         )}

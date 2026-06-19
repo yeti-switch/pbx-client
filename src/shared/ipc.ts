@@ -23,6 +23,19 @@ export interface SipConfig {
   wssEndpoints: string[]
   /** Optional ICE servers for WebRTC. */
   iceServers: RTCIceServer[]
+  /**
+   * When true, strip all ICE candidates except server-reflexive (srflx) from
+   * offers/answers — useful when only the public path matters and host/relay
+   * candidates just add noise/latency. (Risky if STUN yields no srflx.)
+   */
+  iceSrflxOnly: boolean
+  /**
+   * Advanced: value passed to Chromium's `--force-fieldtrials` at startup (e.g.
+   * `WebRTC-IceFieldTrials/initial_select_dampening:100/`). Applied in the main
+   * process before the app starts — GLOBAL and requires an app restart to take
+   * effect. Leave blank for defaults.
+   */
+  webrtcFieldTrials: string
 }
 
 export const DEFAULT_SIP_CONFIG: SipConfig = {
@@ -31,7 +44,9 @@ export const DEFAULT_SIP_CONFIG: SipConfig = {
   domain: '',
   instanceId: '',
   wssEndpoints: [],
-  iceServers: []
+  iceServers: [],
+  iceSrflxOnly: false,
+  webrtcFieldTrials: ''
 }
 
 /** Softphone status the renderer pushes to the main process (drives the tray). */

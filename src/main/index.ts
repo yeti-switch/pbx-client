@@ -15,6 +15,21 @@ import {
 // SIP config persisted as JSON under the OS user-data directory.
 const configPath = (): string => join(app.getPath('userData'), 'sip-config.json')
 
+// Apply Chromium WebRTC field trials from the persisted config BEFORE the app
+// starts (command-line switches must be set this early). Global + restart-only.
+;(() => {
+  try {
+    const raw = JSON.parse(readFileSync(configPath(), 'utf-8')) as Partial<SipConfig>
+    const trials = raw.webrtcFieldTrials?.trim()
+    if (trials) {
+      app.commandLine.appendSwitch('force-fieldtrials', trials)
+      console.log('Applied --force-fieldtrials:', trials)
+    }
+  } catch {
+    // no config yet / unreadable — skip
+  }
+})()
+
 let sipConfig: SipConfig = { ...DEFAULT_SIP_CONFIG }
 
 let mainWindow: BrowserWindow | null = null
