@@ -1,8 +1,9 @@
 import { Phone, Settings, Sun, Moon, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useThemeStore, type Theme } from '@/lib/theme'
+import type { NavItemId } from '@/lib/nav'
 
-export type NavItemId = 'dialer' | 'settings'
+export type { NavItemId }
 
 interface NavRailProps {
   active: NavItemId
@@ -67,7 +68,7 @@ function ThemeToggle(): React.JSX.Element {
 /** Always-collapsed left vertical menu (icon-only rail). */
 function NavRail({ active, onSelect }: NavRailProps): React.JSX.Element {
   return (
-    <nav className="flex h-full w-14 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar py-3">
+    <nav className="flex h-full w-14 shrink-0 flex-col items-center gap-1 bg-sidebar py-2">
       {TOP_ITEMS.map((item) => (
         <RailButton key={item.id} item={item} active={active === item.id} onSelect={onSelect} />
       ))}

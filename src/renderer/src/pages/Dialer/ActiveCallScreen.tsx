@@ -96,8 +96,9 @@ function ActiveCallScreen({
           </ActionButton>
         </div>
       ) : (
-        <div className="flex flex-wrap justify-center gap-3">
+        <div className="grid w-full grid-cols-4 gap-2">
           <ActionButton
+            compact
             label={call.muted ? 'Unmute' : 'Mute'}
             active={call.muted}
             onClick={() => onToggleMute(call.id)}
@@ -106,6 +107,7 @@ function ActiveCallScreen({
           </ActionButton>
 
           <ActionButton
+            compact
             label={call.held ? 'Unhold' : 'Hold'}
             active={call.held}
             disabled={call.holdPending}
@@ -115,7 +117,8 @@ function ActiveCallScreen({
           </ActionButton>
 
           <ActionButton
-            label={call.recording ? 'Stop recording' : 'Start recording'}
+            compact
+            label="Recording"
             active={call.recording}
             onClick={() => onToggleRecording(call.id)}
           >
@@ -126,7 +129,12 @@ function ActiveCallScreen({
             )}
           </ActionButton>
 
-          <ActionButton variant="destructive" label="Hang up" onClick={() => onHangup(call.id)}>
+          <ActionButton
+            compact
+            variant="destructive"
+            label="Hang up"
+            onClick={() => onHangup(call.id)}
+          >
             <PhoneOff className="size-5" />
           </ActionButton>
         </div>

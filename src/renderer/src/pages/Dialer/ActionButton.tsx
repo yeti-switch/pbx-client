@@ -5,6 +5,7 @@ interface ActionButtonProps {
   variant?: 'default' | 'destructive' | 'success'
   active?: boolean
   disabled?: boolean
+  compact?: boolean
   onClick?: () => void
   children?: React.ReactNode
 }
@@ -14,6 +15,7 @@ function ActionButton({
   variant,
   active,
   disabled,
+  compact,
   onClick,
   children
 }: ActionButtonProps): React.JSX.Element {
@@ -30,14 +32,15 @@ function ActionButton({
     <button
       type="button"
       className={cn(
-        'flex flex-col items-center gap-1 rounded-2xl px-4 py-3 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        'flex flex-col items-center gap-1 rounded-2xl font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        compact ? 'w-full rounded-xl px-1 py-2 text-[10px] leading-tight' : 'px-4 py-3 text-xs',
         buttonClass
       )}
       disabled={disabled}
       onClick={onClick}
     >
       {children}
-      <span>{label}</span>
+      <span className={cn('text-center', compact && 'leading-tight')}>{label}</span>
     </button>
   )
 }

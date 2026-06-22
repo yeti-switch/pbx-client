@@ -245,6 +245,23 @@ function awaitGatherSettled(pc: RTCPeerConnection, timeout: number): Promise<voi
 class AnswererSessionDescriptionHandler extends Web.SessionDescriptionHandler {
   private ringback?: { stream: MediaStream; stop: () => void }
 
+  /**
+   * Stock getDescription applies modifiers to the answer BEFORE ICE gathering, so
+   * candidate-filtering modifiers (strip TCP / srflx-only) miss the candidates
+   * added during gathering. Re-apply them to the FINAL SDP (with all candidates).
+   */
+  public async getDescription(
+    options?: SessionDescriptionHandlerOptions,
+    modifiers?: Array<SessionDescriptionHandlerModifier>
+  ): Promise<BodyAndContentType> {
+    const body = await super.getDescription(options, modifiers)
+    const pc = this.peerConnection
+    if (!modifiers?.length || !pc || body.contentType !== 'application/sdp') return body
+    const type = (pc.localDescription?.type ?? 'answer') as RTCSdpType
+    const modified = await this.applyModifiers({ type, sdp: body.body }, modifiers)
+    return { body: modified.sdp ?? body.body, contentType: 'application/sdp' }
+  }
+
   protected getLocalMediaStream(): Promise<void> {
     if (!this.peerConnection) return Promise.reject(new Error('Peer connection closed.'))
     if (this.ringback) return Promise.resolve()

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Check,
   Eye,
@@ -10,19 +10,28 @@ import {
   Phone,
   Palette,
   Info,
-  Network
+  Network,
+  Volume2,
+  Mic,
+  Play,
+  Square
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { useThemeStore, type Theme } from '@/lib/theme'
 import { useConfigStore } from '@/softphone/configStore'
+import { useAudioDevicesStore } from '@/softphone/audioDevicesStore'
+import { useSoftphoneStore } from '@/softphone/store'
+import { RINGTONES, playRingtone, type RingtoneHandle } from '@/softphone/ringtones'
+import PermissionsPanel from './PermissionsPanel'
 import type { AppInfo } from '@shared/ipc'
 
-type SectionId = 'sip' | 'webrtc' | 'appearance' | 'about'
+type SectionId = 'sip' | 'webrtc' | 'audio' | 'appearance' | 'about'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Phone }[] = [
   { id: 'sip', label: 'SIP Settings', icon: Phone },
   { id: 'webrtc', label: 'WebRTC', icon: Network },
+  { id: 'audio', label: 'Audio', icon: Volume2 },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'about', label: 'About', icon: Info }
 ]
@@ -47,6 +56,9 @@ function SettingsPage(): React.JSX.Element {
   const config = useConfigStore()
   const theme = useThemeStore((s) => s.theme)
   const setTheme = useThemeStore((s) => s.setTheme)
+  const audio = useAudioDevicesStore()
+  const applyInput = useSoftphoneStore((s) => s.applyInputDeviceToActiveCalls)
+  const applyOutput = useSoftphoneStore((s) => s.applyOutputDeviceToActiveCalls)
 
   const [section, setSection] = useState<SectionId>('sip')
 
@@ -58,6 +70,9 @@ function SettingsPage(): React.JSX.Element {
   const [iceServers, setIceServers] = useState('')
   const [iceSrflxOnly, setIceSrflxOnly] = useState(false)
   const [webrtcFieldTrials, setWebrtcFieldTrials] = useState('')
+  const [ringtone, setRingtone] = useState('classic')
+  const [previewing, setPreviewing] = useState(false)
+  const previewRef = useRef<RingtoneHandle | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [saved, setSaved] = useState(false)
   const [configPath, setConfigPath] = useState('')
@@ -85,8 +100,31 @@ function SettingsPage(): React.JSX.Element {
     )
     setIceSrflxOnly(config.iceSrflxOnly)
     setWebrtcFieldTrials(config.webrtcFieldTrials)
+    setRingtone(config.ringtone)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.loaded])
+
+  // Stop any ringtone preview when leaving the Audio section or unmounting.
+  const stopPreview = (): void => {
+    previewRef.current?.stop()
+    previewRef.current = null
+    setPreviewing(false)
+  }
+  useEffect(() => {
+    if (section === 'audio') void audio.enumerate()
+    if (section !== 'audio') stopPreview()
+    return stopPreview
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section])
+
+  const togglePreview = (): void => {
+    if (previewing) {
+      stopPreview()
+      return
+    }
+    previewRef.current = playRingtone(ringtone)
+    setPreviewing(true)
+  }
 
   const save = async (): Promise<void> => {
     await config.save({
@@ -97,7 +135,8 @@ function SettingsPage(): React.JSX.Element {
       wssEndpoints: linesToList(endpoints),
       iceServers: linesToList(iceServers).map((urls) => ({ urls })),
       iceSrflxOnly,
-      webrtcFieldTrials: webrtcFieldTrials.trim()
+      webrtcFieldTrials: webrtcFieldTrials.trim(),
+      ringtone
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -334,6 +373,140 @@ function SettingsPage(): React.JSX.Element {
                   version-dependent; applied process-wide and only takes effect after an{' '}
                   <strong>app restart</strong>.
                 </p>
+              </div>
+
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                  onClick={save}
+                >
+                  Save
+                </button>
+                {saved && (
+                  <span className="flex items-center gap-1 text-sm text-green-600 dark:text-green-400">
+                    <Check className="size-4" />
+                    Saved
+                  </span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {section === 'audio' && (
+          <Card className="max-w-xl">
+            <CardContent className="flex flex-col gap-4">
+              {/* Microphone */}
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Mic className="size-3.5 text-muted-foreground" />
+                  Microphone
+                </label>
+                <select
+                  className={inputClass}
+                  value={audio.selectedInputId}
+                  onChange={(e) => {
+                    audio.selectInput(e.target.value)
+                    applyInput()
+                  }}
+                >
+                  {audio.inputs.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label}
+                    </option>
+                  ))}
+                  {audio.inputs.length === 0 && (
+                    <option value="default" disabled>
+                      No devices found
+                    </option>
+                  )}
+                </select>
+              </div>
+
+              {/* Speaker */}
+              <div className="flex flex-col gap-1.5">
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  <Volume2 className="size-3.5 text-muted-foreground" />
+                  Speaker
+                  {!audio.sinkIdSupported && (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      (not supported)
+                    </span>
+                  )}
+                </label>
+                <select
+                  className={`${inputClass} disabled:opacity-50`}
+                  value={audio.selectedOutputId}
+                  disabled={!audio.sinkIdSupported}
+                  onChange={(e) => {
+                    audio.selectOutput(e.target.value)
+                    applyOutput()
+                  }}
+                >
+                  {audio.outputs.map((d) => (
+                    <option key={d.deviceId} value={d.deviceId}>
+                      {d.label}
+                    </option>
+                  ))}
+                  {audio.outputs.length === 0 && (
+                    <option value="default" disabled>
+                      No devices found
+                    </option>
+                  )}
+                </select>
+              </div>
+
+              {audio.inputs.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Grant microphone permission first to see device names.
+                </p>
+              )}
+
+              <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+                <label className="text-sm font-medium">Incoming-call ringtone</label>
+                <div className="flex items-center gap-2">
+                  <select
+                    className={`${inputClass} flex-1`}
+                    value={ringtone}
+                    onChange={(e) => {
+                      stopPreview()
+                      setRingtone(e.target.value)
+                    }}
+                  >
+                    {RINGTONES.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm font-medium transition-colors hover:bg-accent"
+                    onClick={togglePreview}
+                    title={previewing ? 'Stop' : 'Play ringtone'}
+                  >
+                    {previewing ? (
+                      <>
+                        <Square className="size-4" />
+                        Stop
+                      </>
+                    ) : (
+                      <>
+                        <Play className="size-4" />
+                        Test
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Plays through the selected audio output device when a call comes in.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+                <label className="text-sm font-medium">Permissions</label>
+                <PermissionsPanel />
               </div>
 
               <div className="flex items-center gap-3 pt-1">

@@ -29,6 +29,12 @@ const api = {
       const listener = (_e: unknown, callId: string): void => cb(callId)
       ipcRenderer.on(IPC.answerCall, listener)
       return () => ipcRenderer.removeListener(IPC.answerCall, listener)
+    },
+    /** Fired when the user rejects an incoming-call notification. */
+    onReject: (cb: (callId: string) => void): (() => void) => {
+      const listener = (_e: unknown, callId: string): void => cb(callId)
+      ipcRenderer.on(IPC.rejectCall, listener)
+      return () => ipcRenderer.removeListener(IPC.rejectCall, listener)
     }
   }
 }

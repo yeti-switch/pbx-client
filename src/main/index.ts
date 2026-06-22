@@ -69,6 +69,11 @@ function showMainWindow(): void {
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+  mainWindow.moveTop()
+  // Briefly force always-on-top so the window reliably raises above other apps
+  // (some window managers otherwise suppress focus-stealing).
+  mainWindow.setAlwaysOnTop(true)
+  setTimeout(() => mainWindow?.setAlwaysOnTop(false), 800)
 }
 
 function toggleMainWindow(): void {
@@ -133,18 +138,33 @@ function registerIpc(): void {
   })
 
   ipcMain.on(IPC.notifyIncoming, (_e, { callId, label }: IncomingCallPayload) => {
+    // Bring the app to the foreground (restore from tray / raise to top).
+    showMainWindow()
     if (!Notification.isSupported() || incomingNotifications.has(callId)) return
     const n = new Notification({
       title: 'Incoming call',
       body: label,
       icon,
       urgency: 'critical',
-      timeoutType: 'never'
+      timeoutType: 'never',
+      // Action buttons (Linux/macOS where the notification server supports them;
+      // ignored on Windows). Index 0 = Answer, 1 = Reject.
+      actions: [
+        { type: 'button', text: 'Answer' },
+        { type: 'button', text: 'Reject' }
+      ]
     })
-    n.on('click', () => {
-      showMainWindow()
-      mainWindow?.webContents.send(IPC.answerCall, callId)
+    n.on('action', (_event, index) => {
+      if (index === 0) {
+        showMainWindow()
+        mainWindow?.webContents.send(IPC.answerCall, callId)
+      } else if (index === 1) {
+        mainWindow?.webContents.send(IPC.rejectCall, callId)
+      }
+      n.close()
     })
+    // Clicking the notification body just focuses the app (decide in-app).
+    n.on('click', () => showMainWindow())
     n.on('close', () => incomingNotifications.delete(callId))
     incomingNotifications.set(callId, n)
     n.show()

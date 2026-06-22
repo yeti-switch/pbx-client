@@ -95,16 +95,16 @@ const DialPad = forwardRef<DialPadHandle, DialPadProps>(function DialPad({ onDia
       </div>
 
       {/* Digit grid */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-3 gap-1.5">
         {KEYS.map((key) => (
           <button
             key={key.digit}
             type="button"
-            className="flex flex-col items-center justify-center rounded-xl border border-border bg-muted py-3 text-sm font-semibold transition-colors hover:bg-accent active:scale-95"
+            className="flex flex-col items-center justify-center rounded-lg border border-border bg-muted py-1.5 font-semibold transition-colors hover:bg-accent active:scale-95"
             onClick={() => setNumberManual(number + key.digit)}
           >
-            <span className="text-base leading-tight">{key.digit}</span>
-            <span className="text-[9px] leading-tight text-muted-foreground">{key.sub}</span>
+            <span className="text-sm leading-tight">{key.digit}</span>
+            <span className="text-[8px] leading-tight text-muted-foreground">{key.sub}</span>
           </button>
         ))}
       </div>

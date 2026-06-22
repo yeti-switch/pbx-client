@@ -21,6 +21,9 @@ import { useRecordingsStore } from './recordings'
 import { callStatsStore } from './callStats'
 import { desktop } from './desktop'
 import { sdhPool } from './sdhPool'
+import { playRingtone } from './ringtones'
+import { useNavStore } from '../lib/nav'
+import { stripTcpCandidates, stripToSrflxOnly } from './sdpModifiers'
 
 type UserAgentCore = Core.UserAgentCore
 
@@ -34,6 +37,7 @@ let registererStates: RegistererState[] = []
 const sessions = new Map<string, Session>()
 const audioEls = new Map<string, HTMLAudioElement>()
 const ringbacks = new Map<string, { stop(): void }>()
+const ringtones = new Map<string, { stop(): void }>()
 const recordingContexts = new Map<
   string,
   { recorder: MediaRecorder; chunks: Blob[]; ctx: AudioContext; eventId: string }
@@ -66,43 +70,6 @@ function sipDomain(): string {
   return config.domain.trim() || domainFromEndpoint(config.wssEndpoints[0] ?? '')
 }
 
-/**
- * SDP modifier that drops ICE candidate lines whose transport is TCP, so only
- * UDP candidates are offered/answered. (The browser still gathers TCP host
- * candidates internally — there's no standard API to disable that — but they're
- * never put on the wire.) Applied to outbound invites, answers and re-invites.
- */
-function stripTcpCandidates(
-  description: RTCSessionDescriptionInit
-): Promise<RTCSessionDescriptionInit> {
-  if (description.sdp) {
-    description.sdp = description.sdp
-      .split(/\r?\n/)
-      .filter((line) => {
-        const m = line.match(/^a=candidate:\S+ \d+ (\w+)/i)
-        return !(m && m[1].toLowerCase() === 'tcp')
-      })
-      .join('\r\n')
-  }
-  return Promise.resolve(description)
-}
-
-/**
- * SDP modifier that keeps ONLY server-reflexive (srflx) ICE candidates — drops
- * host and relay. Enabled via the "ICE srflx only" WebRTC setting.
- */
-function stripToSrflxOnly(
-  description: RTCSessionDescriptionInit
-): Promise<RTCSessionDescriptionInit> {
-  if (description.sdp) {
-    description.sdp = description.sdp
-      .split(/\r?\n/)
-      .filter((line) => !line.startsWith('a=candidate:') || /\btyp srflx\b/.test(line))
-      .join('\r\n')
-  }
-  return Promise.resolve(description)
-}
-
 /** SDP modifiers to apply per call, based on current config. */
 function sdpModifiers(): Array<
   (d: RTCSessionDescriptionInit) => Promise<RTCSessionDescriptionInit>
@@ -119,6 +86,22 @@ function deriveRegistrationState(): void {
       : RegistererState.Unregistered
   }
   useSoftphoneStore.setState({ registrationState: state })
+}
+
+/**
+ * Self-rescheduling transport reconnect. The fork only fires `onDisconnect` on a
+ * Connected→Disconnected transition — a FAILED reconnect attempt
+ * (Connecting→Disconnected) does NOT fire it — so a one-shot reconnect would give
+ * up after a single failure. Here we retry on `ua.reconnect()` rejection until it
+ * succeeds (onConnect then clears the timer and re-registers).
+ */
+function scheduleReconnect(): void {
+  if (reconnectTimer || !ua || ua.state === UserAgentState.Stopped) return
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    if (!ua || ua.state === UserAgentState.Stopped) return
+    ua.reconnect().catch(() => scheduleReconnect())
+  }, 4000)
 }
 
 // ─── Ringback tone (US standard: 440+480 Hz, 2s on / 4s off) ───────────────
@@ -160,6 +143,11 @@ function startRingback(): { stop(): void } {
       ctx.close().catch(() => {})
     }
   }
+}
+
+function stopRingtone(callId: string): void {
+  ringtones.get(callId)?.stop()
+  ringtones.delete(callId)
 }
 
 function attachAudio(session: Session, audioEl: HTMLAudioElement): void {
@@ -267,6 +255,7 @@ function wireSession(
 
     if (newState === SessionState.Established) {
       desktop.clearIncoming(callId)
+      stopRingtone(callId)
       const connectedAt = now()
       store().patchActiveCall(callId, { connectedAt })
       store().updateCallEvent(phone, eventId, { connectedAt, state: 'active' })
@@ -282,6 +271,7 @@ function wireSession(
 
     if (newState === SessionState.Terminated || newState === SessionState.Terminating) {
       desktop.clearIncoming(callId)
+      stopRingtone(callId)
       const call = store().activeCalls[callId]
       const endedAt = now()
       const durationSeconds = call?.connectedAt
@@ -394,7 +384,10 @@ export const sipEngine = {
           })
           wireSession(call.id, remoteUri, displayName, eventId)
           useSoftphoneStore.setState({ selectedPhone: phone })
+          useNavStore.getState().setActive('dialer') // jump to the dialer page
           desktop.notifyIncoming(call.id, displayName ?? phone)
+          // Local ringtone alert while the call is ringing.
+          ringtones.set(call.id, playRingtone(useConfigStore.getState().ringtone))
           // Send 183 early-media (generated ringback) so the answer is built and
           // ICE connects DURING ringing → audio is ~instant when the user answers.
           // Pass the SDP modifiers so the early answer is TCP-stripped too.
@@ -512,11 +505,9 @@ export const sipEngine = {
       onDisconnect: (error?: Error, core?: UserAgentCore) => {
         prevOnDisconnect?.(error as any, core as any)
         if (!error || ua?.state === UserAgentState.Stopped) return
-        if (reconnectTimer) clearTimeout(reconnectTimer)
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null
-          ua?.reconnect().catch(() => {})
-        }, 4000)
+        // Retry until reconnected — keeps retrying even when an attempt's own
+        // connect times out (which would NOT re-fire onDisconnect).
+        scheduleReconnect()
       }
     } as any
 
@@ -546,6 +537,10 @@ export const sipEngine = {
     } finally {
       registererStates = []
       sessions.clear()
+      ringtones.forEach((r) => r.stop())
+      ringtones.clear()
+      ringbacks.forEach((r) => r.stop())
+      ringbacks.clear()
       useSoftphoneStore.setState({
         registrationState: null,
         registrationFlows: [],
@@ -659,6 +654,7 @@ export const sipEngine = {
     const call = store().activeCalls[callId]
     const session = sessions.get(callId)
     if (!call || call.direction !== 'inbound' || !session) return
+    stopRingtone(callId)
     ;(session as Invitation)
       .accept({ sessionDescriptionHandlerModifiers: sdpModifiers() })
       .then(() => {
@@ -674,8 +670,12 @@ export const sipEngine = {
     const call = store().activeCalls[callId]
     const session = sessions.get(callId)
     if (!call || !session) return
+    stopRingtone(callId)
     if (session.state === SessionState.Initial || session.state === SessionState.Establishing) {
-      if (call.direction === 'inbound') (session as Invitation).reject().catch(() => {})
+      // 603 Decline (not the default 480 Temporarily Unavailable) — the user
+      // explicitly rejected the call.
+      if (call.direction === 'inbound')
+        (session as Invitation).reject({ statusCode: 603 }).catch(() => {})
       else (session as Inviter).cancel().catch(() => {})
     } else if (session.state === SessionState.Established) {
       session.bye().catch(() => {})

@@ -41,4 +41,5 @@ export function initDesktopBridge(): void {
   push()
   useSoftphoneStore.subscribe(push)
   desktop.onAnswer((callId) => useSoftphoneStore.getState().answer(callId))
+  desktop.onReject((callId) => useSoftphoneStore.getState().hangup(callId))
 }

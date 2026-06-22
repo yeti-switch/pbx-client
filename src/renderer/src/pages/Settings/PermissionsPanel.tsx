@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Mic, Bell, CheckCircle2, type LucideIcon } from 'lucide-react'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 
 type PermState = 'unknown' | 'prompt' | 'granted' | 'denied'
@@ -43,12 +42,8 @@ function stateColor(state: PermState): string {
   }
 }
 
-interface PermissionsDialogProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}
-
-function PermissionsDialog({ open, onOpenChange }: PermissionsDialogProps): React.JSX.Element {
+/** Microphone + notification permission status with inline "Allow" requests. */
+function PermissionsPanel(): React.JSX.Element {
   const [permissions, setPermissions] = useState<PermEntry[]>(INITIAL)
 
   const patch = useCallback((key: PermKey, p: Partial<PermEntry>): void => {
@@ -57,9 +52,7 @@ function PermissionsDialog({ open, onOpenChange }: PermissionsDialogProps): Reac
 
   const queryStates = useCallback(async (): Promise<void> => {
     try {
-      const micStatus = await navigator.permissions.query({
-        name: 'microphone' as PermissionName
-      })
+      const micStatus = await navigator.permissions.query({ name: 'microphone' as PermissionName })
       patch('microphone', { state: micStatus.state as PermState })
       micStatus.onchange = () => patch('microphone', { state: micStatus.state as PermState })
     } catch {
@@ -76,8 +69,8 @@ function PermissionsDialog({ open, onOpenChange }: PermissionsDialogProps): Reac
   }, [patch])
 
   useEffect(() => {
-    if (open) void queryStates()
-  }, [open, queryStates])
+    void queryStates()
+  }, [queryStates])
 
   const request = async (key: PermKey): Promise<void> => {
     patch(key, { requesting: true })
@@ -98,44 +91,36 @@ function PermissionsDialog({ open, onOpenChange }: PermissionsDialogProps): Reac
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Permissions</DialogTitle>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-2 py-2">
-          {permissions.map((perm) => {
-            const Icon = perm.icon
-            return (
-              <div
-                key={perm.key}
-                className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"
+    <div className="flex flex-col gap-2">
+      {permissions.map((perm) => {
+        const Icon = perm.icon
+        return (
+          <div
+            key={perm.key}
+            className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5"
+          >
+            <Icon className="size-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">{perm.label}</p>
+              <p className={cn('text-xs', stateColor(perm.state))}>{stateLabel(perm.state)}</p>
+            </div>
+            {perm.state !== 'granted' ? (
+              <button
+                type="button"
+                className="shrink-0 rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                disabled={perm.requesting || perm.state === 'denied'}
+                onClick={() => request(perm.key)}
               >
-                <Icon className="size-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{perm.label}</p>
-                  <p className={cn('text-xs', stateColor(perm.state))}>{stateLabel(perm.state)}</p>
-                </div>
-                {perm.state !== 'granted' ? (
-                  <button
-                    type="button"
-                    className="shrink-0 rounded-md bg-primary px-3 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-                    disabled={perm.requesting || perm.state === 'denied'}
-                    onClick={() => request(perm.key)}
-                  >
-                    {perm.state === 'denied' ? 'Denied' : 'Allow'}
-                  </button>
-                ) : (
-                  <CheckCircle2 className="size-4 shrink-0 text-green-500" />
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </DialogContent>
-    </Dialog>
+                {perm.state === 'denied' ? 'Denied' : 'Allow'}
+              </button>
+            ) : (
+              <CheckCircle2 className="size-4 shrink-0 text-green-500" />
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
-export default PermissionsDialog
+export default PermissionsPanel

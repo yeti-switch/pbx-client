@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Card } from '@/components/ui/card'
 import { useSoftphoneStore } from '@/softphone/store'
 import { useConfigStore } from '@/softphone/configStore'
 import { phoneFromUri, type ActiveCall } from '@/softphone/types'
@@ -101,16 +100,16 @@ function SoftPhone(): React.JSX.Element {
 
   if (config.loaded && config.wssEndpoints.length === 0) {
     return (
-      <Card className="flex h-full flex-col items-center justify-center gap-0 overflow-hidden py-0">
+      <div className="flex h-full flex-col items-center justify-center overflow-hidden">
         <p className="px-6 text-center text-sm text-muted-foreground">
           No SIP endpoint configured. Add your SIP credentials and a wss:// endpoint in Settings.
         </p>
-      </Card>
+      </div>
     )
   }
 
   return (
-    <Card className="flex h-full flex-col gap-0 overflow-hidden py-0">
+    <div className="flex h-full flex-col overflow-hidden">
       <div className="flex min-h-0 flex-1">
         {/* Left+center: contacts+history OR sip log */}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -161,7 +160,7 @@ function SoftPhone(): React.JSX.Element {
           />
         </div>
       </div>
-    </Card>
+    </div>
   )
 }
 

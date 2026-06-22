@@ -6,5 +6,6 @@ export const desktop = {
   notifyIncoming: (callId: string, label: string): void =>
     window.api.notifications.showIncoming(callId, label),
   clearIncoming: (callId: string): void => window.api.notifications.clearIncoming(callId),
-  onAnswer: (cb: (callId: string) => void): (() => void) => window.api.notifications.onAnswer(cb)
+  onAnswer: (cb: (callId: string) => void): (() => void) => window.api.notifications.onAnswer(cb),
+  onReject: (cb: (callId: string) => void): (() => void) => window.api.notifications.onReject(cb)
 }

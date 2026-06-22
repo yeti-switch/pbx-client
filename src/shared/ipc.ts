@@ -36,6 +36,8 @@ export interface SipConfig {
    * effect. Leave blank for defaults.
    */
   webrtcFieldTrials: string
+  /** Id of the ringtone played on incoming calls (see RINGTONES). */
+  ringtone: string
 }
 
 export const DEFAULT_SIP_CONFIG: SipConfig = {
@@ -46,7 +48,8 @@ export const DEFAULT_SIP_CONFIG: SipConfig = {
   wssEndpoints: [],
   iceServers: [],
   iceSrflxOnly: false,
-  webrtcFieldTrials: ''
+  webrtcFieldTrials: '',
+  ringtone: 'classic'
 }
 
 /** Softphone status the renderer pushes to the main process (drives the tray). */
@@ -82,8 +85,9 @@ export const IPC = {
   // Native notifications (shown from the main process)
   notifyIncoming: 'app:notify-incoming',
   clearIncoming: 'app:clear-incoming',
-  // main → renderer: user accepted the incoming-call notification
+  // main → renderer: user accepted/rejected the incoming-call notification
   answerCall: 'call:answer',
+  rejectCall: 'call:reject',
   // App/runtime info (About section)
   appInfo: 'app:info'
 } as const

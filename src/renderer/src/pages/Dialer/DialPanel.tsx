@@ -1,13 +1,5 @@
-import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
-import {
-  Check,
-  RefreshCw,
-  Settings,
-  ScrollText,
-  TriangleAlert,
-  ShieldCheck,
-  AudioLines
-} from 'lucide-react'
+import { forwardRef, useImperativeHandle, useRef } from 'react'
+import { Check, RefreshCw, Settings, ScrollText, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -21,8 +13,6 @@ import {
 import { RegistererState, type ActiveCall } from '@/softphone/types'
 import ActiveCallScreen from './ActiveCallScreen'
 import DialPad, { type DialPadHandle } from './DialPad'
-import AudioDevicesDialog from './AudioDevicesDialog'
-import PermissionsDialog from './PermissionsDialog'
 
 export interface DialPanelHandle {
   prefill: (number: string) => void
@@ -75,8 +65,6 @@ const DialPanel = forwardRef<DialPanelHandle, DialPanelProps>(function DialPanel
   } = props
 
   const dialPadRef = useRef<DialPadHandle>(null)
-  const [audioDevicesOpen, setAudioDevicesOpen] = useState(false)
-  const [permissionsOpen, setPermissionsOpen] = useState(false)
 
   useImperativeHandle(ref, () => ({ prefill: (n) => dialPadRef.current?.setNumber(n) }), [])
 
@@ -148,22 +136,10 @@ const DialPanel = forwardRef<DialPanelHandle, DialPanelProps>(function DialPanel
                 Logs
                 <DropdownMenuShortcut>⌃⇧L</DropdownMenuShortcut>
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setAudioDevicesOpen(true)}>
-                <AudioLines className="size-4" />
-                Audio devices
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onSelect={() => setPermissionsOpen(true)}>
-                <ShieldCheck className="size-4" />
-                Check permissions
-              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </div>
-
-      <AudioDevicesDialog open={audioDevicesOpen} onOpenChange={setAudioDevicesOpen} />
-      <PermissionsDialog open={permissionsOpen} onOpenChange={setPermissionsOpen} />
 
       {/* Body */}
       <div className="flex flex-1 flex-col justify-center gap-4 overflow-y-auto p-4">
