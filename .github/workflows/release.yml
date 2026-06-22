@@ -2,7 +2,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*'] # e.g. v1.0.1 — keep package.json "version" in sync with the tag
+    tags: ['v*'] # e.g. v0.0.1 — the build version is taken from the tag (see below)
 
 permissions:
   contents: write # needed to create/upload the GitHub Release
@@ -21,6 +21,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Version comes from the tag (strip leading "v"), NOT package.json — so the
+      # release/artifacts are named after the tag (e.g. v0.0.1 → 0.0.1).
+      - name: Derive version from tag
+        id: ver
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -38,12 +45,12 @@ jobs:
 
       - name: Build & publish (Linux — AppImage + deb, snap dropped in CI)
         if: matrix.platform == 'linux'
-        run: npx electron-vite build && npx electron-builder --linux AppImage deb --publish always
+        run: npx electron-vite build && npx electron-builder --linux AppImage deb --publish always -c.extraMetadata.version=${{ steps.ver.outputs.version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & publish (Windows — NSIS)
         if: matrix.platform == 'win'
-        run: npx electron-vite build && npx electron-builder --win nsis --publish always
+        run: npx electron-vite build && npx electron-builder --win nsis --publish always -c.extraMetadata.version=${{ steps.ver.outputs.version }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
