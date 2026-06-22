@@ -21,7 +21,7 @@ jobs:
       # The lint/typecheck/test/bundle steps don't need the Electron binary,
       # so we don't fetch it here (that's only needed for packaging — see release.yml).
       - name: Install
-        run: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts --no-fund --no-audit --loglevel=error
 
       - name: Lint
         run: npm run lint
