@@ -36,6 +36,12 @@ jobs:
       - name: Install (no scripts)
         run: npm ci --ignore-scripts --no-fund --no-audit --loglevel=error
 
+      # Stamp the tag version into package.json so app.getVersion() and the
+      # artifact/release names all match the tag (cross-platform, no fragile CLI args).
+      - name: Set version from tag
+        shell: bash
+        run: npm pkg set version="${{ steps.ver.outputs.version }}"
+
       # --ignore-scripts skipped these; packaging needs them, so run explicitly:
       - name: Fetch Electron binary
         run: node node_modules/electron/install.js
@@ -45,12 +51,12 @@ jobs:
 
       - name: Build & publish (Linux — AppImage + deb, snap dropped in CI)
         if: matrix.platform == 'linux'
-        run: npx electron-vite build && npx electron-builder --linux AppImage deb --publish always -c.extraMetadata.version=${{ steps.ver.outputs.version }}
+        run: npx electron-vite build && npx electron-builder --linux AppImage deb --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & publish (Windows — NSIS)
         if: matrix.platform == 'win'
-        run: npx electron-vite build && npx electron-builder --win nsis --publish always -c.extraMetadata.version=${{ steps.ver.outputs.version }}
+        run: npx electron-vite build && npx electron-builder --win nsis --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
