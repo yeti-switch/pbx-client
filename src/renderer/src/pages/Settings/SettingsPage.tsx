@@ -14,7 +14,12 @@ import {
   Volume2,
   Mic,
   Play,
-  Square
+  Square,
+  Cloud,
+  Link2,
+  Unplug,
+  Loader2,
+  CheckCircle2
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -26,10 +31,11 @@ import { RINGTONES, playRingtone, type RingtoneHandle } from '@/softphone/ringto
 import PermissionsPanel from './PermissionsPanel'
 import type { AppInfo } from '@shared/ipc'
 
-type SectionId = 'sip' | 'webrtc' | 'audio' | 'appearance' | 'about'
+type SectionId = 'sip' | 'phonesystems' | 'webrtc' | 'audio' | 'appearance' | 'about'
 
 const SECTIONS: { id: SectionId; label: string; icon: typeof Phone }[] = [
   { id: 'sip', label: 'SIP Settings', icon: Phone },
+  { id: 'phonesystems', label: 'Phone.Systems', icon: Cloud },
   { id: 'webrtc', label: 'WebRTC', icon: Network },
   { id: 'audio', label: 'Audio', icon: Volume2 },
   { id: 'appearance', label: 'Appearance', icon: Palette },
@@ -50,6 +56,18 @@ function linesToList(text: string): string[] {
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
+}
+
+function formatUptime(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const d = Math.floor(s / 86400)
+  const h = Math.floor((s % 86400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const parts: string[] = []
+  if (d) parts.push(`${d}d`)
+  if (d || h) parts.push(`${h}h`)
+  parts.push(`${m}m`, `${s % 60}s`)
+  return parts.join(' ')
 }
 
 function SettingsPage(): React.JSX.Element {
@@ -77,12 +95,28 @@ function SettingsPage(): React.JSX.Element {
   const [saved, setSaved] = useState(false)
   const [configPath, setConfigPath] = useState('')
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
+  const [uptimeNow, setUptimeNow] = useState(() => Date.now())
+
+  // Phone.Systems provisioning
+  const provisioning = config.provisioning
+  const provisioned = provisioning != null
+  const [token, setToken] = useState('')
+  const [connecting, setConnecting] = useState(false)
+  const [provError, setProvError] = useState('')
 
   // Resolve the on-disk config file path and app/runtime info (from main).
   useEffect(() => {
     void window.api.config.path().then(setConfigPath)
     void window.api.app.info().then(setAppInfo)
   }, [])
+
+  // Tick the uptime once per second while the About section is open.
+  useEffect(() => {
+    if (section !== 'about') return
+    setUptimeNow(Date.now())
+    const t = setInterval(() => setUptimeNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [section])
 
   // Load current config into the form once it's available.
   useEffect(() => {
@@ -102,7 +136,25 @@ function SettingsPage(): React.JSX.Element {
     setWebrtcFieldTrials(config.webrtcFieldTrials)
     setRingtone(config.ringtone)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.loaded])
+  }, [config.loaded, config.provisioning?.applicationUuid, config.username])
+
+  const connectPhoneSystems = async (): Promise<void> => {
+    if (!token.trim()) return
+    setConnecting(true)
+    setProvError('')
+    const result = await config.connectPhoneSystems(token.trim())
+    setConnecting(false)
+    if (result.ok) setToken('')
+    else setProvError(result.error ?? 'Failed to connect.')
+  }
+
+  const disconnectPhoneSystems = async (): Promise<void> => {
+    setConnecting(true)
+    setProvError('')
+    const result = await config.disconnectPhoneSystems()
+    setConnecting(false)
+    if (!result.ok) setProvError(result.error ?? 'Failed to disconnect.')
+  }
 
   // Stop any ringtone preview when leaving the Audio section or unmounting.
   const stopPreview = (): void => {
@@ -136,7 +188,9 @@ function SettingsPage(): React.JSX.Element {
       iceServers: linesToList(iceServers).map((urls) => ({ urls })),
       iceSrflxOnly,
       webrtcFieldTrials: webrtcFieldTrials.trim(),
-      ringtone
+      ringtone,
+      // Provisioning is backend-managed; preserve it (main also re-applies it).
+      provisioning: config.provisioning
     })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -212,13 +266,23 @@ function SettingsPage(): React.JSX.Element {
         {section === 'sip' && (
           <Card className="max-w-xl">
             <CardContent className="flex flex-col gap-4">
+              {provisioned && (
+                <div className="flex items-start gap-2 rounded-md border border-border bg-muted/50 p-3 text-xs text-muted-foreground">
+                  <Cloud className="mt-0.5 size-4 shrink-0 text-green-600 dark:text-green-400" />
+                  <span>
+                    These credentials are managed by <strong>Phone.Systems</strong> and are
+                    read-only. Manage the connection in the Phone.Systems section.
+                  </span>
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium">Username</label>
                 <input
-                  className={inputClass}
+                  className={cn(inputClass, provisioned && 'opacity-60')}
                   value={username}
                   autoComplete="off"
                   placeholder="e.g. 1001"
+                  disabled={provisioned}
                   onChange={(e) => setUsername(e.target.value)}
                 />
               </div>
@@ -227,10 +291,11 @@ function SettingsPage(): React.JSX.Element {
                 <label className="text-sm font-medium">Password</label>
                 <div className="relative">
                   <input
-                    className={`${inputClass} pr-10`}
+                    className={cn(inputClass, 'pr-10', provisioned && 'opacity-60')}
                     type={showPassword ? 'text' : 'password'}
                     value={password}
                     autoComplete="off"
+                    disabled={provisioned}
                     onChange={(e) => setPassword(e.target.value)}
                   />
                   <button
@@ -248,10 +313,11 @@ function SettingsPage(): React.JSX.Element {
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium">SIP domain</label>
                 <input
-                  className={inputClass}
+                  className={cn(inputClass, provisioned && 'opacity-60')}
                   value={domain}
                   autoComplete="off"
                   placeholder="e.g. phone.systems"
+                  disabled={provisioned}
                   onChange={(e) => setDomain(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
@@ -263,10 +329,11 @@ function SettingsPage(): React.JSX.Element {
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium">WSS endpoints</label>
                 <textarea
-                  className={`${inputClass} min-h-20 font-mono`}
+                  className={cn(inputClass, 'min-h-20 font-mono', provisioned && 'opacity-60')}
                   value={endpoints}
                   placeholder={'wss://sip.example.com\nwss://sip2.example.com'}
                   spellCheck={false}
+                  disabled={provisioned}
                   onChange={(e) => setEndpoints(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">One endpoint per line.</p>
@@ -276,22 +343,25 @@ function SettingsPage(): React.JSX.Element {
                 <label className="text-sm font-medium">Instance ID</label>
                 <div className="flex items-center gap-2">
                   <input
-                    className={`${inputClass} font-mono`}
+                    className={cn(inputClass, 'font-mono', provisioned && 'opacity-60')}
                     value={instanceId}
                     autoComplete="off"
                     spellCheck={false}
                     placeholder="generated automatically"
+                    disabled={provisioned}
                     onChange={(e) => setInstanceId(e.target.value)}
                   />
-                  <button
-                    type="button"
-                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm transition-colors hover:bg-muted"
-                    title="Generate a new instance ID"
-                    onClick={() => setInstanceId(crypto.randomUUID())}
-                  >
-                    <RefreshCw className="size-4" />
-                    Regenerate
-                  </button>
+                  {!provisioned && (
+                    <button
+                      type="button"
+                      className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-3 py-2 text-sm transition-colors hover:bg-muted"
+                      title="Generate a new instance ID"
+                      onClick={() => setInstanceId(crypto.randomUUID())}
+                    >
+                      <RefreshCw className="size-4" />
+                      Regenerate
+                    </button>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   RFC 5626 +sip.instance UUID. Generated on first run and kept stable; regenerate or
@@ -299,27 +369,119 @@ function SettingsPage(): React.JSX.Element {
                 </p>
               </div>
 
-              <div className="flex items-center gap-3 pt-1">
-                <button
-                  type="button"
-                  className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-                  onClick={save}
-                >
-                  Save
-                </button>
-                {saved && (
-                  <span className="flex items-center gap-1 text-sm text-green-600 dark:text-green-400">
-                    <Check className="size-4" />
-                    Saved
-                  </span>
-                )}
-              </div>
+              {!provisioned && (
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                    onClick={save}
+                  >
+                    Save
+                  </button>
+                  {saved && (
+                    <span className="flex items-center gap-1 text-sm text-green-600 dark:text-green-400">
+                      <Check className="size-4" />
+                      Saved
+                    </span>
+                  )}
+                </div>
+              )}
 
               {configPath && (
                 <p className="border-t border-border pt-3 text-xs text-muted-foreground">
                   Stored at <span className="font-mono break-all">{configPath}</span>
                 </p>
               )}
+            </CardContent>
+          </Card>
+        )}
+
+        {section === 'phonesystems' && (
+          <Card className="max-w-xl">
+            <CardContent className="flex flex-col gap-4">
+              {!provisioned ? (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-medium">Activation token</label>
+                    <input
+                      className={cn(inputClass, 'font-mono')}
+                      value={token}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="e.g. 3:xxxxxxxxxxxxxxxx"
+                      disabled={connecting}
+                      onChange={(e) => setToken(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void connectPhoneSystems()
+                      }}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Paste the token from your Phone.Systems invitation. Connecting creates an
+                      application on Phone.Systems and provisions your SIP credentials
+                      automatically; the environment is detected from the token.
+                    </p>
+                  </div>
+                  <div>
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+                      disabled={connecting || !token.trim()}
+                      onClick={() => void connectPhoneSystems()}
+                    >
+                      {connecting ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Link2 className="size-4" />
+                      )}
+                      Connect
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="size-5 text-green-600 dark:text-green-400" />
+                    <span className="text-sm font-semibold">Connected to Phone.Systems</span>
+                  </div>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+                    <dt className="text-muted-foreground">Owner</dt>
+                    <dd>
+                      {provisioning?.ownerName ??
+                        (provisioning?.ownerId != null ? `#${provisioning.ownerId}` : '—')}
+                    </dd>
+                    <dt className="text-muted-foreground">Environment</dt>
+                    <dd className="capitalize">{provisioning?.environment}</dd>
+                    <dt className="text-muted-foreground">Username</dt>
+                    <dd className="font-mono break-all">{config.username || '—'}</dd>
+                    <dt className="text-muted-foreground">SIP domain</dt>
+                    <dd className="font-mono break-all">{config.domain || '—'}</dd>
+                    <dt className="text-muted-foreground">Application ID</dt>
+                    <dd className="font-mono break-all">{provisioning?.applicationUuid}</dd>
+                    <dt className="text-muted-foreground">Connected</dt>
+                    <dd>
+                      {provisioning?.connectedAt
+                        ? new Date(provisioning.connectedAt).toLocaleString()
+                        : '—'}
+                    </dd>
+                  </dl>
+                  <div className="border-t border-border pt-3">
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 rounded-md border border-red-500/40 px-4 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-500/10 disabled:opacity-50 dark:text-red-400"
+                      disabled={connecting}
+                      onClick={() => void disconnectPhoneSystems()}
+                    >
+                      {connecting ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Unplug className="size-4" />
+                      )}
+                      Disconnect
+                    </button>
+                  </div>
+                </>
+              )}
+              {provError && <p className="text-sm text-red-600 dark:text-red-400">{provError}</p>}
             </CardContent>
           </Card>
         )}
@@ -547,6 +709,12 @@ function SettingsPage(): React.JSX.Element {
                 <dd className="font-mono">{appInfo?.chrome ?? '…'}</dd>
                 <dt className="text-muted-foreground">Node</dt>
                 <dd className="font-mono">{appInfo?.node ?? '…'}</dd>
+                <dt className="text-muted-foreground">Started</dt>
+                <dd>{appInfo ? new Date(appInfo.startedAt).toLocaleString() : '…'}</dd>
+                <dt className="text-muted-foreground">Uptime</dt>
+                <dd className="font-mono">
+                  {appInfo ? formatUptime(uptimeNow - appInfo.startedAt) : '…'}
+                </dd>
               </dl>
             </CardContent>
           </Card>

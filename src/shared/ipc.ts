@@ -38,6 +38,34 @@ export interface SipConfig {
   webrtcFieldTrials: string
   /** Id of the ringtone played on incoming calls (see RINGTONES). */
   ringtone: string
+  /**
+   * Phone.Systems provisioning. Non-null when the client is provisioned (a
+   * "mobile_applications" resource was created on the backend). While set, the
+   * SIP credentials above are backend-managed and treated as read-only.
+   */
+  provisioning: ProvisioningInfo | null
+}
+
+export type PhoneSystemsEnv = 'production' | 'staging' | 'sandbox'
+
+/** Details of the provisioned Phone.Systems application (shown in Settings). */
+export interface ProvisioningInfo {
+  environment: PhoneSystemsEnv
+  /** The mobile_applications resource id (also used as the SIP +sip.instance). */
+  applicationUuid: string
+  /** Bearer/raw access token for authenticated Phone.Systems API calls. */
+  accessToken: string
+  ownerId: number | null
+  /** Owner/contact display name for the status card (best-effort). */
+  ownerName: string | null
+  /** ISO timestamp of when the client was provisioned. */
+  connectedAt: string
+}
+
+/** Result of a connect/disconnect provisioning request. */
+export interface ProvisioningResult {
+  ok: boolean
+  error?: string
 }
 
 export const DEFAULT_SIP_CONFIG: SipConfig = {
@@ -49,7 +77,8 @@ export const DEFAULT_SIP_CONFIG: SipConfig = {
   iceServers: [],
   iceSrflxOnly: false,
   webrtcFieldTrials: '',
-  ringtone: 'classic'
+  ringtone: 'classic',
+  provisioning: null
 }
 
 /** Softphone status the renderer pushes to the main process (drives the tray). */
@@ -72,6 +101,8 @@ export interface AppInfo {
   electron: string
   chrome: string
   node: string
+  /** Epoch ms when the app process started (for uptime). */
+  startedAt: number
 }
 
 /** IPC channel names — keep renderer/main in sync. */
@@ -89,5 +120,8 @@ export const IPC = {
   answerCall: 'call:answer',
   rejectCall: 'call:reject',
   // App/runtime info (About section)
-  appInfo: 'app:info'
+  appInfo: 'app:info',
+  // Phone.Systems provisioning (handled in the main process)
+  provisioningConnect: 'provisioning:connect',
+  provisioningDisconnect: 'provisioning:disconnect'
 } as const

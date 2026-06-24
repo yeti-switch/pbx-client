@@ -9,7 +9,10 @@ import {
   DEFAULT_SIP_CONFIG,
   type AppStatus,
   type IncomingCallPayload,
-  type SipConfig
+  type SipConfig,
+  type PhoneSystemsEnv,
+  type ProvisioningInfo,
+  type ProvisioningResult
 } from '../shared/ipc'
 
 // SIP config persisted as JSON under the OS user-data directory.
@@ -31,6 +34,9 @@ const configPath = (): string => join(app.getPath('userData'), 'sip-config.json'
 })()
 
 let sipConfig: SipConfig = { ...DEFAULT_SIP_CONFIG }
+
+// Epoch ms when this process started (for the About → uptime display).
+const APP_STARTED_AT = Date.now()
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -59,6 +65,153 @@ function loadConfig(): void {
     sipConfig.instanceId = randomUUID()
     persistConfig()
   }
+}
+
+function broadcastConfig(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(IPC.configChanged, sipConfig)
+  }
+}
+
+// ─── Phone.Systems provisioning ────────────────────────────────────────────
+const PS_API_BASE: Record<PhoneSystemsEnv, string> = {
+  production: 'https://phone.systems/api/rest',
+  staging: 'https://staging.phone.systems/api/rest',
+  sandbox: 'https://sandbox.phone.systems/api/rest'
+}
+const PS_SIP_WSS: Record<PhoneSystemsEnv, string> = {
+  production: 'wss://sip.phone.systems',
+  staging: 'wss://sip.staging.phone.systems',
+  sandbox: 'wss://sip.sandbox.phone.systems'
+}
+
+/** Token format is `<env>:<token>` (1=staging, 2=sandbox, 3=production). */
+function parseToken(raw: string): { env: PhoneSystemsEnv; token: string } | null {
+  const idx = raw.indexOf(':')
+  if (idx < 1) return null
+  const env: PhoneSystemsEnv | undefined = (
+    { '1': 'staging', '2': 'sandbox', '3': 'production' } as const
+  )[raw.slice(0, idx)]
+  const token = raw.slice(idx + 1).trim()
+  if (!env || !token) return null
+  return { env, token }
+}
+
+/** Pull a human-readable message out of a JSON:API error body, if present. */
+function describeApiError(text: string): string {
+  try {
+    const j = JSON.parse(text)
+    if (Array.isArray(j?.errors) && j.errors.length) {
+      return j.errors
+        .map(
+          (e: { detail?: string; title?: string; code?: string }) => e.detail || e.title || e.code
+        )
+        .filter(Boolean)
+        .join('; ')
+    }
+  } catch {
+    /* not JSON */
+  }
+  return ''
+}
+
+async function provisioningConnect(rawToken: string): Promise<ProvisioningResult> {
+  const parsed = parseToken((rawToken ?? '').trim())
+  if (!parsed) return { ok: false, error: 'Invalid token format (expected "<env>:<token>").' }
+  const { env, token } = parsed
+  const url = `${PS_API_BASE[env]}/mobile_application/mobile_applications?include=contact,version,crm_integration,call_flows`
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/vnd.api+json',
+        Accept: 'application/vnd.api+json'
+      },
+      body: JSON.stringify({
+        data: { type: 'mobile_applications', attributes: { invitation_token: token } }
+      })
+    })
+    if (!res.ok) {
+      const detail = describeApiError(await res.text().catch(() => ''))
+      return {
+        ok: false,
+        error: `Provisioning failed (HTTP ${res.status})${detail ? ': ' + detail : ''}`
+      }
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const json: any = await res.json()
+    const data = json?.data
+    const attrs = data?.attributes ?? {}
+    if (!data?.id || !attrs.username || !attrs.access_token) {
+      return { ok: false, error: 'Unexpected provisioning response (missing credentials).' }
+    }
+
+    let ownerName: string | null = null
+    const contact = Array.isArray(json.included)
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        json.included.find((r: any) => r?.type === 'internal_contacts')
+      : undefined
+    if (contact?.attributes) {
+      const fn = contact.attributes.first_name ?? contact.attributes.firstName ?? ''
+      const ln = contact.attributes.last_name ?? contact.attributes.lastName ?? ''
+      ownerName = [fn, ln].filter(Boolean).join(' ').trim() || null
+    }
+
+    const provisioning: ProvisioningInfo = {
+      environment: env,
+      applicationUuid: String(data.id),
+      accessToken: String(attrs.access_token),
+      ownerId: attrs.owner_id != null ? Number(attrs.owner_id) : null,
+      ownerName,
+      connectedAt: new Date().toISOString()
+    }
+    // Apply backend-managed SIP credentials (now read-only in the UI).
+    sipConfig = {
+      ...sipConfig,
+      username: String(attrs.username),
+      password: String(attrs.password ?? ''),
+      domain: String(attrs.domain ?? ''),
+      instanceId: String(data.id),
+      wssEndpoints: [PS_SIP_WSS[env]],
+      provisioning
+    }
+    persistConfig()
+    broadcastConfig()
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: `Network error: ${String(err)}` }
+  }
+}
+
+async function provisioningDisconnect(): Promise<ProvisioningResult> {
+  const prov = sipConfig.provisioning
+  if (prov) {
+    // Best-effort remote deactivation; disconnect locally regardless of outcome.
+    try {
+      await fetch(
+        `${PS_API_BASE[prov.environment]}/mobile_application/mobile_applications/${prov.applicationUuid}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: prov.accessToken, Accept: 'application/vnd.api+json' }
+        }
+      )
+    } catch {
+      /* ignore — local disconnect still proceeds */
+    }
+  }
+  // Clear provisioning + the backend-managed SIP credentials; fresh local instance id.
+  sipConfig = {
+    ...sipConfig,
+    username: '',
+    password: '',
+    domain: '',
+    wssEndpoints: [],
+    instanceId: randomUUID(),
+    provisioning: null
+  }
+  persistConfig()
+  broadcastConfig()
+  return { ok: true }
 }
 
 function showMainWindow(): void {
@@ -120,17 +273,20 @@ function registerIpc(): void {
     version: app.getVersion(),
     electron: process.versions.electron,
     chrome: process.versions.chrome,
-    node: process.versions.node
+    node: process.versions.node,
+    startedAt: APP_STARTED_AT
   }))
   ipcMain.handle(IPC.configSet, (_e, cfg: SipConfig) => {
-    sipConfig = { ...DEFAULT_SIP_CONFIG, ...cfg }
+    // Preserve provisioning (backend-managed) across renderer config saves.
+    const provisioning = sipConfig.provisioning
+    sipConfig = { ...DEFAULT_SIP_CONFIG, ...cfg, provisioning }
     // Never allow an empty instance id — keep/generate one.
     if (!sipConfig.instanceId) sipConfig.instanceId = randomUUID()
     persistConfig()
-    for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send(IPC.configChanged, sipConfig)
-    }
+    broadcastConfig()
   })
+  ipcMain.handle(IPC.provisioningConnect, (_e, token: string) => provisioningConnect(token))
+  ipcMain.handle(IPC.provisioningDisconnect, () => provisioningDisconnect())
 
   ipcMain.on(IPC.appSetStatus, (_e, next: AppStatus) => {
     status = next
