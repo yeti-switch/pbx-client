@@ -19,15 +19,24 @@ import {
   Link2,
   Unplug,
   Loader2,
-  CheckCircle2
+  CheckCircle2,
+  Plus,
+  X
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { useThemeStore, type Theme } from '@/lib/theme'
 import { useConfigStore } from '@/softphone/configStore'
 import { useAudioDevicesStore } from '@/softphone/audioDevicesStore'
 import { useSoftphoneStore } from '@/softphone/store'
 import { RINGTONES, playRingtone, type RingtoneHandle } from '@/softphone/ringtones'
+import { availableVoiceCodecs } from '@/softphone/codecPreferences'
 import PermissionsPanel from './PermissionsPanel'
 import type { AppInfo } from '@shared/ipc'
 
@@ -89,6 +98,7 @@ function SettingsPage(): React.JSX.Element {
   const [iceSrflxOnly, setIceSrflxOnly] = useState(false)
   const [webrtcFieldTrials, setWebrtcFieldTrials] = useState('')
   const [ringtone, setRingtone] = useState('classic')
+  const [selectedCodecs, setSelectedCodecs] = useState<string[]>([])
   const [previewing, setPreviewing] = useState(false)
   const previewRef = useRef<RingtoneHandle | null>(null)
   const [showPassword, setShowPassword] = useState(false)
@@ -96,6 +106,7 @@ function SettingsPage(): React.JSX.Element {
   const [configPath, setConfigPath] = useState('')
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [uptimeNow, setUptimeNow] = useState(() => Date.now())
+  const [audioCodecs, setAudioCodecs] = useState<string[]>([])
 
   // Phone.Systems provisioning
   const provisioning = config.provisioning
@@ -108,6 +119,23 @@ function SettingsPage(): React.JSX.Element {
   useEffect(() => {
     void window.api.config.path().then(setConfigPath)
     void window.api.app.info().then(setAppInfo)
+    // Audio codecs supported by this Chromium build (de-duplicated).
+    try {
+      const caps = RTCRtpReceiver.getCapabilities?.('audio')
+      const seen = new Set<string>()
+      const list: string[] = []
+      for (const c of caps?.codecs ?? []) {
+        const name = c.mimeType.replace(/^audio\//i, '')
+        const label = `${name}/${c.clockRate}${c.channels && c.channels > 1 ? '/' + c.channels : ''}`
+        if (!seen.has(label)) {
+          seen.add(label)
+          list.push(label)
+        }
+      }
+      setAudioCodecs(list)
+    } catch {
+      /* getCapabilities unavailable */
+    }
   }, [])
 
   // Tick the uptime once per second while the About section is open.
@@ -135,8 +163,17 @@ function SettingsPage(): React.JSX.Element {
     setIceSrflxOnly(config.iceSrflxOnly)
     setWebrtcFieldTrials(config.webrtcFieldTrials)
     setRingtone(config.ringtone)
+    // Ordered selection (chip order = priority). Empty config = all, default order.
+    const avail = availableVoiceCodecs()
+    setSelectedCodecs(
+      config.audioCodecs.length === 0 ? avail : config.audioCodecs.filter((n) => avail.includes(n))
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config.loaded, config.provisioning?.applicationUuid, config.username])
+
+  const addCodec = (name: string): void => setSelectedCodecs((cs) => [...cs, name])
+  const removeCodec = (name: string): void =>
+    setSelectedCodecs((cs) => cs.filter((c) => c !== name))
 
   const connectPhoneSystems = async (): Promise<void> => {
     if (!token.trim()) return
@@ -189,6 +226,7 @@ function SettingsPage(): React.JSX.Element {
       iceSrflxOnly,
       webrtcFieldTrials: webrtcFieldTrials.trim(),
       ringtone,
+      audioCodecs: selectedCodecs,
       // Provisioning is backend-managed; preserve it (main also re-applies it).
       provisioning: config.provisioning
     })
@@ -520,6 +558,65 @@ function SettingsPage(): React.JSX.Element {
               </label>
 
               <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+                <label className="text-sm font-medium">Audio codecs</label>
+                <p className="text-xs text-muted-foreground">
+                  Offered in the order shown (first = highest priority). DTMF and comfort-noise are
+                  always kept.
+                </p>
+                <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-border p-2">
+                  {selectedCodecs.map((name) => (
+                    <span
+                      key={name}
+                      className="flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-xs"
+                    >
+                      {name}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${name}`}
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => removeCodec(name)}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {(() => {
+                    const addable = availableVoiceCodecs().filter(
+                      (n) => !selectedCodecs.includes(n)
+                    )
+                    if (addable.length === 0) return null
+                    return (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                          >
+                            <Plus className="size-3" />
+                            Add
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          {addable.map((name) => (
+                            <DropdownMenuItem
+                              key={name}
+                              className="font-mono"
+                              onSelect={() => addCodec(name)}
+                            >
+                              {name}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )
+                  })()}
+                  {selectedCodecs.length === 0 && availableVoiceCodecs().length === 0 && (
+                    <span className="text-xs text-muted-foreground">No codecs available.</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5 border-t border-border pt-3">
                 <label className="text-sm font-medium">ICE field trials (advanced)</label>
                 <input
                   className={`${inputClass} font-mono`}
@@ -716,6 +813,28 @@ function SettingsPage(): React.JSX.Element {
                   {appInfo ? formatUptime(uptimeNow - appInfo.startedAt) : '…'}
                 </dd>
               </dl>
+
+              <div className="border-t border-border pt-3">
+                <p className="mb-1.5 text-sm text-muted-foreground">Audio codecs</p>
+                {audioCodecs.length === 0 ? (
+                  <span className="text-xs text-muted-foreground">unavailable</span>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {audioCodecs.map((c) => (
+                      <span
+                        key={c}
+                        className="rounded bg-muted px-2 py-0.5 font-mono text-xs text-foreground"
+                      >
+                        {c}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <p className="mt-1.5 text-xs text-muted-foreground">
+                  Supported by this build; the codec used per call is chosen during negotiation (see
+                  Logs → RTCStat).
+                </p>
+              </div>
             </CardContent>
           </Card>
         )}

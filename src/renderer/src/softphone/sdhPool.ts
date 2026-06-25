@@ -10,6 +10,8 @@ import type {
 } from 'sip.js'
 import { useSipLogStore } from './sipLogStore'
 import { useAudioDevicesStore } from './audioDevicesStore'
+import { useConfigStore } from './configStore'
+import { applyCodecPreferences } from './codecPreferences'
 
 /**
  * Pool of pre-warmed SessionDescriptionHandlers.
@@ -101,6 +103,8 @@ function preGather(sdh: SessionDescriptionHandler, id: number): void {
   // Hard cap so a flow with no candidates at all can't hang the SDH forever.
   setTimeout(() => settle('settle cap (3s)'), 3000)
   pc.addTransceiver('audio', { direction: 'sendrecv' })
+  // Codec priority / enable-disable (native setCodecPreferences) before the offer.
+  applyCodecPreferences(pc, useConfigStore.getState().audioCodecs)
   pc.createOffer()
     .then((offer) => pc.setLocalDescription(offer))
     .then(() => log(`pre-gather #${id}: started (sendrecv, no mic/track)`))
@@ -254,6 +258,11 @@ class AnswererSessionDescriptionHandler extends Web.SessionDescriptionHandler {
     options?: SessionDescriptionHandlerOptions,
     modifiers?: Array<SessionDescriptionHandlerModifier>
   ): Promise<BodyAndContentType> {
+    // Apply codec priority/enable BEFORE the answer is created (transceivers
+    // already exist from setRemoteDescription).
+    if (this.peerConnection) {
+      applyCodecPreferences(this.peerConnection, useConfigStore.getState().audioCodecs)
+    }
     const body = await super.getDescription(options, modifiers)
     const pc = this.peerConnection
     if (!modifiers?.length || !pc || body.contentType !== 'application/sdp') return body

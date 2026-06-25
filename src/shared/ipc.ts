@@ -39,6 +39,13 @@ export interface SipConfig {
   /** Id of the ringtone played on incoming calls (see RINGTONES). */
   ringtone: string
   /**
+   * Ordered list of ENABLED audio codec names (rtpmap subtype, e.g. "opus",
+   * "G722", "PCMU", "PCMA"), highest priority first. Codecs not listed are
+   * disabled (removed from offers/answers). Empty = browser default (no change).
+   * Auxiliary codecs (telephone-event/CN/RED) are always preserved.
+   */
+  audioCodecs: string[]
+  /**
    * Phone.Systems provisioning. Non-null when the client is provisioned (a
    * "mobile_applications" resource was created on the backend). While set, the
    * SIP credentials above are backend-managed and treated as read-only.
@@ -78,6 +85,7 @@ export const DEFAULT_SIP_CONFIG: SipConfig = {
   iceSrflxOnly: false,
   webrtcFieldTrials: '',
   ringtone: 'classic',
+  audioCodecs: [],
   provisioning: null
 }
 

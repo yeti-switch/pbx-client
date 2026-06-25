@@ -34,7 +34,8 @@ function SoftPhone(): React.JSX.Element {
     u: config.username,
     p: config.password,
     e: config.wssEndpoints,
-    i: config.iceServers
+    i: config.iceServers,
+    c: config.audioCodecs
   })
   useEffect(() => {
     if (!config.loaded || config.wssEndpoints.length === 0) return
